@@ -2,14 +2,17 @@
 #include <AnalyzerHelpers.h>
 #include "SerialAnalyzer.h"
 #include "SerialAnalyzerSettings.h"
+
 #include <iostream>
 #include <sstream>
 #include <stdio.h>
+#include <cmath>
+#include <iomanip>
 
 SerialAnalyzerResults::SerialAnalyzerResults( SerialAnalyzer* analyzer, SerialAnalyzerSettings* settings )
-:	AnalyzerResults(),
-	mSettings( settings ),
-	mAnalyzer( analyzer )
+	:	AnalyzerResults(),
+	  mSettings( settings ),
+	  mAnalyzer( analyzer )
 {
 }
 
@@ -17,11 +20,15 @@ SerialAnalyzerResults::~SerialAnalyzerResults()
 {
 }
 
-void SerialAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& /*channel*/, DisplayBase display_base )  //unrefereced vars commented out to remove warnings.
+void SerialAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel, DisplayBase display_base )  //unrefereced vars commented out to remove warnings.
 {
-	//we only need to pay attention to 'channel' if we're making bubbles for more than one channel (as set by AddChannelBubblesWillAppearOn)
 	ClearResultStrings();
 	Frame frame = GetFrame( frame_index );
+	if (
+			(channel == mSettings->mTxChannel && ((frame.mFlags & IS_TX) == 0))
+			|| (channel == mSettings->mRxChannel && ((frame.mFlags & IS_TX) == IS_TX))) {
+		return;
+	}
 
 	bool framing_error = false;
 	if( ( frame.mFlags & FRAMING_ERROR_FLAG ) != 0 )
@@ -39,6 +46,7 @@ void SerialAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& /*chan
 	AnalyzerHelpers::GetNumberString( frame.mData1, display_base, bits_per_transfer, number_str, 128 );
 
 	char result_str[128];
+	memset(result_str, 0, sizeof(result_str));
 
 	//MP mode address case:
 	bool mp_mode_address_flag = false;
@@ -79,20 +87,42 @@ void SerialAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& /*chan
 		if( parity_error == true && framing_error == false )
 			snprintf( result_str, sizeof(result_str), "%s (parity error)", number_str );
 		else
-		if( parity_error == false && framing_error == true )
-			snprintf( result_str, sizeof(result_str), "%s (framing error)", number_str );
-		else
-			snprintf( result_str, sizeof(result_str), "%s (framing error & parity error)", number_str );
+			if( parity_error == false && framing_error == true )
+				snprintf( result_str, sizeof(result_str), "%s (framing error)", number_str );
+			else
+				snprintf( result_str, sizeof(result_str), "%s (framing error & parity error)", number_str );
 
 		AddResultString( result_str );
-			
+
 	}else
 	{
 		AddResultString( number_str );
 	}
 }
 
-void SerialAnalyzerResults::GenerateExportFile( const char* file, DisplayBase display_base, U32 /*export_type_user_id*/ )
+void SerialAnalyzerResults::GenerateExportFile( const char* file, DisplayBase display_base, U32 export_type_user_id )
+{
+	auto type = static_cast<ExportType>(export_type_user_id);
+	switch (type) {
+	case ExportType::TxOnly:
+	case ExportType::TxOnlyWithTimeStamps:
+	case ExportType::RxOnly:
+	case ExportType::RxOnlyWithTimeStamps:
+		GenerateSingleChannelPacketizedTxt(file, type);
+		break;
+	case ExportType::CSV_OrTxt:
+		GenerateCSV_OrTxt(file, display_base);
+		break;
+	case ExportType::PacketizedText:
+		GeneratePacketizedTxt(file);
+		break;
+	case ExportType::PacketizedTextWithTimeStamps:
+		GeneratePacketizedTxt(file, true);
+		break;
+	}
+}
+
+void SerialAnalyzerResults::GenerateCSV_OrTxt(const char* file, DisplayBase display_base)
 {
 	//export_type_user_id is only important if we have more than one export type.
 	std::stringstream ss;
@@ -157,7 +187,7 @@ void SerialAnalyzerResults::GenerateExportFile( const char* file, DisplayBase di
 				continue;
 			}
 
-			U64 packet_id = GetPacketContainingFrameSequential( i ); 
+			U64 packet_id = GetPacketContainingFrameSequential( i );
 
 			//static void GetTimeString( U64 sample, U64 trigger_sample, U32 sample_rate_hz, char* result_string, U32 result_string_max_length );
 			char time_str[128];
@@ -196,9 +226,177 @@ void SerialAnalyzerResults::GenerateExportFile( const char* file, DisplayBase di
 	AnalyzerHelpers::EndFile( f );
 }
 
+SerialAnalyzer::ChannelType channelTypeFromFrame(const Frame &frame)
+{
+	return (frame.mFlags & IS_TX) ? SerialAnalyzer::Tx : SerialAnalyzer::Rx;
+}
+
+void SerialAnalyzerResults::GenerateSingleChannelPacketizedTxt(const char* file, ExportType type)
+{
+	std::stringstream ss;
+	void* f = AnalyzerHelpers::StartFile( file );
+
+	U64 num_frames = GetNumFrames();
+	if (num_frames) {
+		U64 lastSkippedFrameIndex = 0;
+		U64 lastSkippedFrameStartTime = 0;
+		U64 frameCounter = 1;
+		SerialAnalyzer::ChannelType processedChannel = SerialAnalyzer::Tx;
+		if (type == ExportType::RxOnly || type == ExportType::RxOnlyWithTimeStamps)
+			processedChannel = SerialAnalyzer::Rx;
+		for( U32 processedFrameIndex = 0; processedFrameIndex < num_frames; processedFrameIndex++ )
+		{
+			if( processedFrameIndex != 0 ) {
+				//below, we "continue" the loop rather than run to the end.  So we need to save to the file here.
+				AnalyzerHelpers::AppendToFile( (U8*)ss.str().c_str(), ss.str().length(), f );
+				ss.str( std::string() );
+
+				if( UpdateExportProgressAndCheckForCancel( processedFrameIndex, num_frames ) == true )
+				{
+					AnalyzerHelpers::EndFile( f );
+					return;
+				}
+			}
+
+			auto frame = GetFrame( processedFrameIndex );
+			if (processedChannel == channelTypeFromFrame(frame)) {
+				if (frame.mFlags & PACKET_START) {
+					if (processedFrameIndex)
+						ss << "\n";
+
+					if (type == ExportType::RxOnlyWithTimeStamps
+							|| type == ExportType::TxOnlyWithTimeStamps) {
+						char time_str[128];
+						AnalyzerHelpers::GetTimeString( frame.mStartingSampleInclusive, mAnalyzer->GetTriggerSample(), mAnalyzer->GetSampleRate(), time_str, 128 );
+						ss << time_str << " ";
+					}
+
+					if (frame.mFlags & IS_TX) {
+						ss << "TX";
+					} else {
+						ss << "RX";
+					}
+				}
+
+				if (frame.mFlags & PARITY_ERROR_FLAG)
+					ss << "pe";
+				else if (frame.mFlags & FRAMING_ERROR_FLAG)
+					ss << "fe";
+				else
+					ss << " " << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << frame.mData1;
+			}
+		}
+	}
+	UpdateExportProgressAndCheckForCancel( num_frames, num_frames );
+	AnalyzerHelpers::EndFile( f );
+}
+
+void SerialAnalyzerResults::GeneratePacketizedTxt(const char *file, bool addTimeStamps)
+{
+	std::stringstream ss;
+	void* f = AnalyzerHelpers::StartFile( file );
+
+	U64 num_frames = GetNumFrames();
+	if (num_frames) {
+		U64 lastSkippedFrameIndex = 0;
+		U64 lastSkippedFrameStartTime = 0;
+		U64 frameCounter = 1;
+		SerialAnalyzer::ChannelType processedChannel = GetFrame(0).mFlags & IS_TX ? SerialAnalyzer::Tx : SerialAnalyzer::Rx;
+		for( U32 processedFrameIndex = 0; processedFrameIndex < num_frames; processedFrameIndex++ )
+		{
+			if( processedFrameIndex != 0 ) {
+				//below, we "continue" the loop rather than run to the end.  So we need to save to the file here.
+				AnalyzerHelpers::AppendToFile( (U8*)ss.str().c_str(), ss.str().length(), f );
+				ss.str( std::string() );
+
+				if( UpdateExportProgressAndCheckForCancel( processedFrameIndex, num_frames ) == true )
+				{
+					AnalyzerHelpers::EndFile( f );
+					return;
+				}
+			}
+
+			auto frame = GetFrame( processedFrameIndex );
+			if (processedChannel == channelTypeFromFrame(frame)) {
+				if (frame.mFlags & PACKET_START) {
+					printf("New packet at %lf ch %s\n",
+						   frame.mStartingSampleInclusive / 500000000.0,
+						   processedChannel == SerialAnalyzer::Tx ? "TX" : "RX");
+					fflush(stdout);
+					// the current frame belongs to a new packet
+					// see if we skipped any packets on the opposite channel
+					// which is before the current packet in time than the current
+					if (lastSkippedFrameIndex != 0 && lastSkippedFrameStartTime < frame.mStartingSampleInclusive) {
+						// save the current sample as skipped
+						auto lastSkippedToRestore = lastSkippedFrameIndex;
+						lastSkippedFrameIndex = processedFrameIndex;
+						lastSkippedFrameStartTime = frame.mStartingSampleInclusive;
+
+						// restore to the last skipped index
+						processedFrameIndex = lastSkippedToRestore - 1;
+						processedChannel = channelTypeFromFrame(GetFrame(processedFrameIndex + 1));
+						printf("Jump back to %lf ch %s\n",
+							   GetFrame(processedFrameIndex + 1).mStartingSampleInclusive / 500000000.0,
+							   processedChannel == SerialAnalyzer::Tx ? "TX" : "RX");
+						fflush(stdout);
+						continue;
+					}
+
+					if (processedFrameIndex)
+						ss << "\n";
+
+					if (addTimeStamps) {
+						char time_str[128];
+						AnalyzerHelpers::GetTimeString( frame.mStartingSampleInclusive, mAnalyzer->GetTriggerSample(), mAnalyzer->GetSampleRate(), time_str, 128 );
+						ss << time_str << " ";
+					}
+
+					if (frame.mFlags & IS_TX) {
+						ss << "TX";
+					} else {
+						ss << "RX";
+					}
+				}
+
+				if (frame.mFlags & PARITY_ERROR_FLAG)
+					ss << "pe";
+				else if (frame.mFlags & FRAMING_ERROR_FLAG)
+					ss << "fe";
+				else
+					ss << " " << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << frame.mData1;
+			} else {
+				// mark only the very first frame on the opposite channel
+				if (lastSkippedFrameIndex == 0 && (frame.mFlags & PACKET_START)) {
+					// mark the first packet skipped on the opposite channel
+					lastSkippedFrameIndex = processedFrameIndex;
+					lastSkippedFrameStartTime = frame.mStartingSampleInclusive;
+				}
+			}
+
+			if (processedFrameIndex == (num_frames - 1) && lastSkippedFrameIndex != 0) {
+				// at the end export the rest of packets on the opposite channel (if left any)
+				auto lastSkippedToRestore = lastSkippedFrameIndex;
+				lastSkippedFrameIndex = 0;
+				lastSkippedFrameStartTime = 0;
+
+				// restore to the last skipped index
+				processedFrameIndex = lastSkippedToRestore - 1;
+				processedChannel = channelTypeFromFrame(GetFrame(processedFrameIndex + 1));
+				printf("Jump back to %lf ch %s\n",
+					   GetFrame(processedFrameIndex + 1).mStartingSampleInclusive / 500000000.0,
+					   processedChannel == SerialAnalyzer::Tx ? "TX" : "RX");
+				fflush(stdout);
+				continue;
+			}
+		}
+	}
+	UpdateExportProgressAndCheckForCancel( num_frames, num_frames );
+	AnalyzerHelpers::EndFile( f );
+}
+
 void SerialAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase display_base )
 {
-    ClearTabularText();
+	ClearTabularText();
 	Frame frame = GetFrame( frame_index );
 
 	bool framing_error = false;
@@ -243,13 +441,13 @@ void SerialAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBa
 		if( parity_error == true && framing_error == false )
 			snprintf( result_str, sizeof(result_str), "%s (parity error)", number_str );
 		else
-		if( parity_error == false && framing_error == true )
-			snprintf( result_str, sizeof(result_str), "%s (framing error)", number_str );
-		else
-			snprintf( result_str, sizeof(result_str), "%s (framing error & parity error)", number_str );
+			if( parity_error == false && framing_error == true )
+				snprintf( result_str, sizeof(result_str), "%s (framing error)", number_str );
+			else
+				snprintf( result_str, sizeof(result_str), "%s (framing error & parity error)", number_str );
 
 		AddTabularText( result_str );
-			
+
 	}else
 	{
 		AddTabularText( number_str );

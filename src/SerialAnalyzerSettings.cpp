@@ -7,19 +7,36 @@
 #pragma warning(disable: 4800) //warning C4800: 'U32' : forcing value to bool 'true' or 'false' (performance warning)
 
 SerialAnalyzerSettings::SerialAnalyzerSettings()
-:	mInputChannel( UNDEFINED_CHANNEL ),
+:	mTxChannel( UNDEFINED_CHANNEL ),
 	mBitRate( 9600 ),
 	mBitsPerTransfer( 8 ),
 	mStopBits( 1.0 ),
 	mParity( AnalyzerEnums::None ),
 	mShiftOrder( AnalyzerEnums::LsbFirst ),
-	mInverted( false ),
+	mTxInverted( false ),
+	mRxInverted( false ),
 	mUseAutobaud( false ),
 	mSerialMode( SerialAnalyzerEnums::Normal )
 {
-	mInputChannelInterface.reset( new AnalyzerSettingInterfaceChannel() );
-	mInputChannelInterface->SetTitleAndTooltip( "Input Channel", "Standard Async Serial" );
-	mInputChannelInterface->SetChannel( mInputChannel );
+	mTxChannelInterface.reset( new AnalyzerSettingInterfaceChannel() );
+	mTxChannelInterface->SetTitleAndTooltip( "Tx Channel", "Standard Async Serial" );
+	mTxChannelInterface->SetChannel( mTxChannel );
+
+	mRxChannelInterface.reset( new AnalyzerSettingInterfaceChannel() );
+	mRxChannelInterface->SetTitleAndTooltip( "Rx Channel", "Standard Async Serial" );
+	mRxChannelInterface->SetChannel( mRxChannel );
+
+	mTxPacketMinGapInterface.reset( new AnalyzerSettingInterfaceInteger() );
+	mTxPacketMinGapInterface->SetTitleAndTooltip( "Tx packet min gap (us)",  "Specify the gap after the decoded bytes will be assigned to the next packet." );
+	mTxPacketMinGapInterface->SetMax( 100000000 );
+	mTxPacketMinGapInterface->SetMin( 1 );
+	mTxPacketMinGapInterface->SetInteger( mTxPacketMinGapIn_us );
+
+	mRxPacketMinGapInterface.reset( new AnalyzerSettingInterfaceInteger() );
+	mRxPacketMinGapInterface->SetTitleAndTooltip( "Rx packet min gap (us)",  "Specify the gap after the decoded bytes will be assigned to the next packet." );
+	mRxPacketMinGapInterface->SetMax( 100000000 );
+	mRxPacketMinGapInterface->SetMin( 1 );
+	mRxPacketMinGapInterface->SetInteger( mRxPacketMinGapIn_us );
 
 	mBitRateInterface.reset( new AnalyzerSettingInterfaceInteger() );
 	mBitRateInterface->SetTitleAndTooltip( "Bit Rate (Bits/s)",  "Specify the bit rate in bits per second." );
@@ -74,13 +91,19 @@ SerialAnalyzerSettings::SerialAnalyzerSettings()
 	mShiftOrderInterface->SetNumber( mShiftOrder );
 
 
-	mInvertedInterface.reset( new AnalyzerSettingInterfaceNumberList() );
-	mInvertedInterface->SetTitleAndTooltip( "Signal inversion", "Specify if the serial signal is inverted" );
-	mInvertedInterface->AddNumber( false, "Non Inverted (Standard)", "" );
-	mInvertedInterface->AddNumber( true, "Inverted", "" );
+	mRxInvertedInterface.reset( new AnalyzerSettingInterfaceNumberList() );
+	mRxInvertedInterface->SetTitleAndTooltip( "Signal inversion", "Specify if the RX signal is inverted" );
+	mRxInvertedInterface->AddNumber( false, "Non Inverted (Standard)", "" );
+	mRxInvertedInterface->AddNumber( true, "Inverted", "" );
+	mRxInvertedInterface->SetNumber( mRxInverted );
 
-	mInvertedInterface->SetNumber( mInverted );enum Mode { Normal, MpModeRightZeroMeansAddress, MpModeRightOneMeansAddress, MpModeLeftZeroMeansAddress, MpModeLeftOneMeansAddress };
+	mTxInvertedInterface.reset( new AnalyzerSettingInterfaceNumberList() );
+	mTxInvertedInterface->SetTitleAndTooltip( "Signal inversion", "Specify if the TX signal is inverted" );
+	mTxInvertedInterface->AddNumber( false, "Non Inverted (Standard)", "" );
+	mTxInvertedInterface->AddNumber( true, "Inverted", "" );
+	mTxInvertedInterface->SetNumber( mTxInverted );
 
+	enum Mode { Normal, MpModeRightZeroMeansAddress, MpModeRightOneMeansAddress, MpModeLeftZeroMeansAddress, MpModeLeftOneMeansAddress };
 	mSerialModeInterface.reset( new AnalyzerSettingInterfaceNumberList() );
 	mSerialModeInterface->SetTitleAndTooltip( "Mode", "" );
 	mSerialModeInterface->AddNumber( SerialAnalyzerEnums::Normal, "Normal", "" );
@@ -88,22 +111,41 @@ SerialAnalyzerSettings::SerialAnalyzerSettings()
 	mSerialModeInterface->AddNumber( SerialAnalyzerEnums::MpModeMsbOneMeansAddress, "MDB - Address indicated by MSB=1 (TX only)", "Multi-drop, 9-bit serial" );
 	mSerialModeInterface->SetNumber( mSerialMode );
 
-	AddInterface( mInputChannelInterface.get() );
+	AddInterface( mTxChannelInterface.get() );
+	AddInterface( mTxPacketMinGapInterface.get() );
+	AddInterface( mTxInvertedInterface.get() );
+	AddInterface( mRxChannelInterface.get() );
+	AddInterface( mRxPacketMinGapInterface.get() );
+	AddInterface( mRxInvertedInterface.get() );
 	AddInterface( mBitRateInterface.get() );
 	AddInterface( mBitsPerTransferInterface.get() );
 	AddInterface( mStopBitsInterface.get() );
 	AddInterface( mParityInterface.get() );
 	AddInterface( mShiftOrderInterface.get() );
-	AddInterface( mInvertedInterface.get() );
 	AddInterface( mSerialModeInterface.get() );
 
 	//AddExportOption( 0, "Export as text/csv file", "text (*.txt);;csv (*.csv)" );
-	AddExportOption( 0, "Export as text/csv file" );
-	AddExportExtension( 0, "text", "txt" );
-	AddExportExtension( 0, "csv", "csv" );
+	AddExportOption( static_cast<U32>(ExportType::CSV_OrTxt), "Export bytes as text/csv file" );
+	AddExportExtension( static_cast<U32>(ExportType::CSV_OrTxt), "text", "txt" );
+	AddExportExtension( static_cast<U32>(ExportType::CSV_OrTxt), "csv", "csv" );
+
+	AddExportOption( static_cast<U32>(ExportType::PacketizedText), "Export as packetized txt" );
+	AddExportExtension( static_cast<U32>(ExportType::PacketizedText), "text", "txt" );
+	AddExportOption( static_cast<U32>(ExportType::PacketizedTextWithTimeStamps), "Export as packetized txt with timestamps" );
+	AddExportExtension( static_cast<U32>(ExportType::PacketizedTextWithTimeStamps), "text", "txt" );
+
+	AddExportOption( static_cast<U32>(ExportType::TxOnly), "Export as TX channel to packetized txt" );
+	AddExportExtension( static_cast<U32>(ExportType::TxOnly), "text", "txt" );
+	AddExportOption( static_cast<U32>(ExportType::TxOnlyWithTimeStamps), "Export as TX channel to packetized txt with timestamps" );
+	AddExportExtension( static_cast<U32>(ExportType::TxOnlyWithTimeStamps), "text", "txt" );
+
+	AddExportOption( static_cast<U32>(ExportType::RxOnly), "Export as RX channel to packetized txt" );
+	AddExportExtension( static_cast<U32>(ExportType::RxOnly), "text", "txt" );
+	AddExportOption( static_cast<U32>(ExportType::RxOnlyWithTimeStamps), "Export as RX channel to packetized txt with timestamps" );
+	AddExportExtension( static_cast<U32>(ExportType::RxOnlyWithTimeStamps), "text", "txt" );
 
 	ClearChannels();
-	AddChannel( mInputChannel, "Serial", false );
+	AddChannel( mTxChannel, "Serial", false );
 }
 
 SerialAnalyzerSettings::~SerialAnalyzerSettings()
@@ -119,31 +161,40 @@ bool SerialAnalyzerSettings::SetSettingsFromInterfaces()
 			return false;
 		}
 
-	mInputChannel = mInputChannelInterface->GetChannel();
+	mTxChannel = mTxChannelInterface->GetChannel();
+	mRxChannel = mRxChannelInterface->GetChannel();
+	mTxPacketMinGapIn_us = mTxPacketMinGapInterface->GetInteger();
+	mRxPacketMinGapIn_us = mRxPacketMinGapInterface->GetInteger();
 	mBitRate = mBitRateInterface->GetInteger();
 	mBitsPerTransfer = U32( mBitsPerTransferInterface->GetNumber() );
 	mStopBits = mStopBitsInterface->GetNumber();
 	mParity = AnalyzerEnums::Parity( U32( mParityInterface->GetNumber() ) );
 	mShiftOrder =  AnalyzerEnums::ShiftOrder( U32( mShiftOrderInterface->GetNumber() ) );
-	mInverted = bool( U32( mInvertedInterface->GetNumber() ) );
+	mTxInverted = bool( U32( mTxInvertedInterface->GetNumber() ) );
+	mRxInverted = bool( U32( mRxInvertedInterface->GetNumber() ) );
 	mUseAutobaud = mUseAutobaudInterface->GetValue();
 	mSerialMode = SerialAnalyzerEnums::Mode( U32( mSerialModeInterface->GetNumber() ) );
 
 	ClearChannels();
-	AddChannel( mInputChannel, "Serial", true );
+	AddChannel( mTxChannel, "Tx", true );
+	AddChannel( mRxChannel, "Rx", true );
 
 	return true;
 }
 
 void SerialAnalyzerSettings::UpdateInterfacesFromSettings()
 {
-	mInputChannelInterface->SetChannel( mInputChannel );
+	mTxChannelInterface->SetChannel( mTxChannel );
+	mRxChannelInterface->SetChannel( mRxChannel );
+	mTxPacketMinGapInterface->SetInteger( mTxPacketMinGapIn_us );
+	mRxPacketMinGapInterface->SetInteger( mRxPacketMinGapIn_us );
 	mBitRateInterface->SetInteger( mBitRate );
 	mBitsPerTransferInterface->SetNumber( mBitsPerTransfer );
 	mStopBitsInterface->SetNumber( mStopBits );
 	mParityInterface->SetNumber( mParity );
 	mShiftOrderInterface->SetNumber( mShiftOrder );
-	mInvertedInterface->SetNumber( mInverted );
+	mTxInvertedInterface->SetNumber( mTxInverted );
+	mRxInvertedInterface->SetNumber( mRxInverted );
 	mUseAutobaudInterface->SetValue( mUseAutobaud );
 	mSerialModeInterface->SetNumber( mSerialMode );
 }
@@ -155,16 +206,24 @@ void SerialAnalyzerSettings::LoadSettings( const char* settings )
 
 	const char* name_string;	//the first thing in the archive is the name of the protocol analyzer that the data belongs to.
 	text_archive >> &name_string;
-	if( strcmp( name_string, "SaleaeAsyncSerialAnalyzer" ) != 0 )
-		AnalyzerHelpers::Assert( "SaleaeAsyncSerialAnalyzer: Provided with a settings string that doesn't belong to us;" );
+	if( strcmp( name_string, "DualAsyncSerialAnalyzer" ) != 0 )
+		AnalyzerHelpers::Assert( "DualAsyncSerialAnalyzer: Provided with a settings string that doesn't belong to us;" );
 
-	text_archive >> mInputChannel;
+	text_archive >> mTxChannel;
+	text_archive >> mRxChannel;
+	text_archive >> mTxPacketMinGapIn_us;
+	if (mTxPacketMinGapIn_us == 0)
+		mTxPacketMinGapIn_us = 10;
+	text_archive >> mRxPacketMinGapIn_us;
+	if (mRxPacketMinGapIn_us == 0)
+		mRxPacketMinGapIn_us = 10;
 	text_archive >> mBitRate;
 	text_archive >> mBitsPerTransfer;
 	text_archive >> mStopBits;
 	text_archive >> *(U32*)&mParity;
 	text_archive >> *(U32*)&mShiftOrder;
-	text_archive >> mInverted;
+	text_archive >> mRxInverted;
+	text_archive >> mTxInverted;
 
 	//check to make sure loading it actual works befor assigning the result -- do this when adding settings to an anylzer which has been previously released.
 	bool use_autobaud;
@@ -176,7 +235,7 @@ void SerialAnalyzerSettings::LoadSettings( const char* settings )
 		mSerialMode = mode;
 
 	ClearChannels();
-	AddChannel( mInputChannel, "Serial", true );
+	AddChannel( mTxChannel, "Serial", true );
 
 	UpdateInterfacesFromSettings();
 }
@@ -185,14 +244,18 @@ const char* SerialAnalyzerSettings::SaveSettings()
 {
 	SimpleArchive text_archive;
 
-	text_archive << "SaleaeAsyncSerialAnalyzer";
-	text_archive << mInputChannel;
+	text_archive << "DualAsyncSerialAnalyzer";
+	text_archive << mTxChannel;
+	text_archive << mRxChannel;
+	text_archive << mTxPacketMinGapIn_us;
+	text_archive << mRxPacketMinGapIn_us;
 	text_archive << mBitRate;
 	text_archive << mBitsPerTransfer;
 	text_archive << mStopBits;
 	text_archive << mParity;
 	text_archive << mShiftOrder;
-	text_archive << mInverted;
+	text_archive << mRxInverted;
+	text_archive << mTxInverted;
 
 	text_archive << mUseAutobaud;
 

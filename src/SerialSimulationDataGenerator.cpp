@@ -15,13 +15,13 @@ void SerialSimulationDataGenerator::Initialize( U32 simulation_sample_rate, Seri
 	mSettings = settings;
 
 	mClockGenerator.Init( mSettings->mBitRate, simulation_sample_rate );
-	mSerialSimulationData.SetChannel( mSettings->mInputChannel );
+	mSerialSimulationData.SetChannel( mSettings->mTxChannel );
 	mSerialSimulationData.SetSampleRate( simulation_sample_rate );
 
-	if( mSettings->mInverted == false )
+	if( mSettings->mTxInverted == false )
 	{
 		mBitLow = BIT_LOW;
-		mBitHigh = BIT_HIGH;	
+		mBitHigh = BIT_HIGH;
 	}
 	else
 	{
@@ -104,7 +104,7 @@ void SerialSimulationDataGenerator::CreateSerialByte( U64 value )
 	mSerialSimulationData.Transition();  //low-going edge for start bit
 	mSerialSimulationData.Advance( mClockGenerator.AdvanceByHalfPeriod() );  //add start bit time
 
-	if( mSettings->mInverted == true )
+	if( mSettings->mTxInverted == true )
 		value = ~value;
 
 	U32 num_bits = mSettings->mBitsPerTransfer;

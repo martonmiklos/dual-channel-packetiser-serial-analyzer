@@ -1,14 +1,17 @@
-#ifndef SERIAL_ANALYZER_RESULTS
-#define SERIAL_ANALYZER_RESULTS
+#pragma once
 
+#include <stdint.h>
 #include <AnalyzerResults.h>
 
 #define FRAMING_ERROR_FLAG ( 1 << 0 )
 #define PARITY_ERROR_FLAG ( 1 << 1 )
 #define MP_MODE_ADDRESS_FLAG ( 1 << 2 )
+#define IS_TX ( 1<<3 )
+#define PACKET_START ( 1 << 4 )
 
 class SerialAnalyzer;
 class SerialAnalyzerSettings;
+enum class ExportType : uint8_t;
 
 class SerialAnalyzerResults : public AnalyzerResults
 {
@@ -24,10 +27,12 @@ public:
 	virtual void GenerateTransactionTabularText( U64 transaction_id, DisplayBase display_base );
 
 protected: //functions
+	void GenerateCSV_OrTxt(const char* file, DisplayBase display_base);
+	void GeneratePacketizedTxt(const char* file, bool addTimeStamps = false);
+	void GenerateSingleChannelPacketizedTxt(const char* file, ExportType type);
 
 protected:  //vars
 	SerialAnalyzerSettings* mSettings;
 	SerialAnalyzer* mAnalyzer;
 };
 
-#endif //SERIAL_ANALYZER_RESULTS

@@ -4,9 +4,9 @@
 
 
 SerialAnalyzer::SerialAnalyzer()
-:	Analyzer2(),  
-	mSettings( new SerialAnalyzerSettings() ),
-	mSimulationInitilized( false )
+	:	Analyzer2(),
+	  mSettings( new SerialAnalyzerSettings() ),
+	  mSimulationInitilized( false )
 {
 	SetAnalyzerSettings( mSettings.get() );
 }
@@ -26,7 +26,7 @@ void SerialAnalyzer::ComputeSampleOffsets()
 	U32 num_bits = mSettings->mBitsPerTransfer;
 
 	if( mSettings->mSerialMode != SerialAnalyzerEnums::Normal )
-	num_bits++;
+		num_bits++;
 
 	mSampleOffsets.push_back( clock_generator.AdvanceByHalfPeriod( 1.5 ) );  //point to the center of the 1st bit (past the start bit)
 	num_bits--;  //we just added the first bit.
@@ -55,7 +55,8 @@ void SerialAnalyzer::SetupResults()
 
 	mResults.reset( new SerialAnalyzerResults( this, mSettings.get() ) );
 	SetAnalyzerResults( mResults.get() );
-	mResults->AddChannelBubblesWillAppearOn( mSettings->mInputChannel );
+	mResults->AddChannelBubblesWillAppearOn( mSettings->mTxChannel );
+	mResults->AddChannelBubblesWillAppearOn( mSettings->mRxChannel );
 }
 
 void SerialAnalyzer::WorkerThread()
@@ -64,179 +65,228 @@ void SerialAnalyzer::WorkerThread()
 	ComputeSampleOffsets();
 	U32 num_bits = mSettings->mBitsPerTransfer;
 
-	if( mSettings->mSerialMode != SerialAnalyzerEnums::Normal )
+	if (mSettings->mSerialMode != SerialAnalyzerEnums::Normal)
 		num_bits++;
 
-	if( mSettings->mInverted == false )
-	{
-		mBitHigh = BIT_HIGH;
-		mBitLow = BIT_LOW;
-	}else
-	{
-		mBitHigh = BIT_LOW;
-		mBitLow = BIT_HIGH;
+	if (mSettings->mTxInverted) {
+		mTxData.bitHigh = BIT_HIGH;
+		mTxData.bitLow = BIT_LOW;
+		mTxData.inverted = true;
 	}
 
-	U64 bit_mask = 0;
+	if (mSettings->mRxInverted) {
+		mRxData.bitHigh = BIT_HIGH;
+		mRxData.bitLow = BIT_LOW;
+		mRxData.inverted = true;
+	}
+
 	U64 mask = 0x1ULL;
-	for( U32 i=0; i<num_bits; i++ )
-	{
+	for( U32 i=0; i<num_bits; i++ ) {
 		bit_mask |= mask;
 		mask <<= 1;
 	}
+
+	mRxData.type = Rx;
+	mRxData.settingsChannel = &mSettings->mRxChannel;
+	mRxData.gapSizeInSamples = (mSettings->mRxPacketMinGapIn_us) * (GetSampleRate() * 0.000001);
+	mRxData.channel = GetAnalyzerChannelData( mSettings->mRxChannel );
+	mRxData.channel->TrackMinimumPulseWidth();
+	mRxData.nextSampleToProcess = mRxData.channel->GetSampleOfNextEdge();
+
+	mTxData.type = Tx;
+	mTxData.settingsChannel = &mSettings->mTxChannel;
+	mTxData.gapSizeInSamples = mSettings->mTxPacketMinGapIn_us * (GetSampleRate() * 0.000001);
+	mTxData.channel = GetAnalyzerChannelData( mSettings->mTxChannel );
+	mTxData.channel->TrackMinimumPulseWidth();
+	mTxData.nextSampleToProcess = mTxData.channel->GetSampleOfNextEdge();
 	
-	mSerial = GetAnalyzerChannelData( mSettings->mInputChannel );
-	mSerial->TrackMinimumPulseWidth();
-	
-	if( mSerial->GetBitState() == mBitLow )
-		mSerial->AdvanceToNextEdge();
+	if( mTxData.channel->GetBitState() == mTxData.bitLow )
+		mTxData.channel->AdvanceToNextEdge();
+
+	if( mRxData.channel->GetBitState() == mRxData.bitLow )
+		mRxData.channel->AdvanceToNextEdge();
 
 	for( ; ; )
 	{
-		//we're starting high.  (we'll assume that we're not in the middle of a byte. 
-
-		mSerial->AdvanceToNextEdge();
-
-		//we're now at the beginning of the start bit.  We can start collecting the data.
-		U64 frame_starting_sample = mSerial->GetSampleNumber();
-
-		U64 data = 0;
-		bool parity_error = false;
-		bool framing_error = false;
-		bool mp_is_address = false;
-		
-		DataBuilder data_builder;
-		data_builder.Reset( &data, mSettings->mShiftOrder, num_bits );
-		U64 marker_location = frame_starting_sample;
-
-		for( U32 i=0; i<num_bits; i++ )
-		{
-			mSerial->Advance( mSampleOffsets[i] );
-			data_builder.AddBit( mSerial->GetBitState() );
-
-			marker_location += mSampleOffsets[i];
-			mResults->AddMarker( marker_location, AnalyzerResults::Dot, mSettings->mInputChannel );
+		if ((mRxData.nextSampleToProcess < mTxData.nextSampleToProcess) || mTxData.lastPacketEndMarked) {
+			WorkerThreadForChannel(&mRxData);
+			ReportProgress(mRxData.nextSampleToProcess);
+		} else {
+			WorkerThreadForChannel(&mTxData);
+			ReportProgress(mTxData.nextSampleToProcess);
 		}
 
-		if( mSettings->mInverted == true )
-			data = (~data) & bit_mask;
-
-		if( mSettings->mSerialMode != SerialAnalyzerEnums::Normal )
-		{
-			//extract the MSB
-			U64 msb = data >> (num_bits - 1);
-			msb &= 0x1;
-			if( mSettings->mSerialMode == SerialAnalyzerEnums::MpModeMsbOneMeansAddress )
-			{
-				if( msb == 0x0 )
-					mp_is_address = false;
-				else
-					mp_is_address = true;
-			}
-			if( mSettings->mSerialMode == SerialAnalyzerEnums::MpModeMsbZeroMeansAddress )
-			{
-				if( msb == 0x0 )
-					mp_is_address = true;
-				else
-					mp_is_address = false;
-			}
-			//now remove the msb.
-			data &= ( bit_mask >> 1 );
-		}
-			
-		parity_error = false;
-
-		if( mSettings->mParity != AnalyzerEnums::None )
-		{
-			mSerial->Advance( mParityBitOffset );
-			bool is_even = AnalyzerHelpers::IsEven( AnalyzerHelpers::GetOnesCount( data ) );
-
-			if( mSettings->mParity == AnalyzerEnums::Even )
-			{
-				if( is_even == true )
-				{
-					if( mSerial->GetBitState() != mBitLow ) //we expect a low bit, to keep the parity even.
-						parity_error = true;
-				}else
-				{
-					if( mSerial->GetBitState() != mBitHigh ) //we expect a high bit, to force parity even.
-						parity_error = true;
-				}
-			}else  //if( mSettings->mParity == AnalyzerEnums::Odd )
-			{
-				if( is_even == false )
-				{
-					if( mSerial->GetBitState() != mBitLow ) //we expect a low bit, to keep the parity odd.
-						parity_error = true;
-				}else
-				{
-					if( mSerial->GetBitState() != mBitHigh ) //we expect a high bit, to force parity odd.
-						parity_error = true;
-				}
-			}
-
-			marker_location += mParityBitOffset;
-			mResults->AddMarker( marker_location, AnalyzerResults::Square, mSettings->mInputChannel );
-		}
-
-		//now we must dermine if there is a framing error.
-		framing_error = false;
-
-		mSerial->Advance( mStartOfStopBitOffset );
-
-		if( mSerial->GetBitState() != mBitHigh )
-		{
-			framing_error = true;
-		}else
-		{
-			U32 num_edges = mSerial->Advance( mEndOfStopBitOffset );
-			if( num_edges != 0 )
-				framing_error = true;
-		}
-
-		if( framing_error == true )
-		{
-			marker_location += mStartOfStopBitOffset;
-			mResults->AddMarker( marker_location, AnalyzerResults::ErrorX, mSettings->mInputChannel );
-
-			if( mEndOfStopBitOffset != 0 )
-			{
-				marker_location += mEndOfStopBitOffset;
-				mResults->AddMarker( marker_location, AnalyzerResults::ErrorX, mSettings->mInputChannel );
-			}
-		}
-
-		//ok now record the value!
-		//note that we're not using the mData2 or mType fields for anything, so we won't bother to set them.
-		Frame frame;
-		frame.mStartingSampleInclusive = frame_starting_sample;
-		frame.mEndingSampleInclusive = mSerial->GetSampleNumber();
-		frame.mData1 = data;
-		frame.mFlags = 0;
-		if( parity_error == true )
-			frame.mFlags |= PARITY_ERROR_FLAG | DISPLAY_AS_ERROR_FLAG;
-
-		if( framing_error == true )
-			frame.mFlags |= FRAMING_ERROR_FLAG | DISPLAY_AS_ERROR_FLAG;
-
-		if( mp_is_address == true )
-			frame.mFlags |= MP_MODE_ADDRESS_FLAG;
-
-		if( mp_is_address == true )
-			mResults->CommitPacketAndStartNewPacket();
-
-		mResults->AddFrame( frame );
-
-		mResults->CommitResults();
-
-		ReportProgress( frame.mEndingSampleInclusive );
+		if (mTxData.lastPacketEndMarked && mRxData.lastPacketEndMarked)
+			SetThreadMustExit();
 		CheckIfThreadShouldExit();
+	}
+}
 
-		if( framing_error == true )  //if we're still low, let's fix that for the next round.
-		{
-			if( mSerial->GetBitState() == mBitLow )
-				mSerial->AdvanceToNextEdge();
+void SerialAnalyzer::WorkerThreadForChannel(ChannelData *chData)
+{
+	if (!chData->channel->DoMoreTransitionsExistInCurrentData()) {
+		if (!chData->lastPacketEndMarked) {
+			mResults->AddMarker( chData->lastByteEnd, AnalyzerResults::Stop, *chData->settingsChannel );
+			chData->lastPacketEndMarked = true;
 		}
+		return;
+	}
+
+	//we're starting high.  (we'll assume that we're not in the middle of a byte.
+	chData->channel->AdvanceToNextEdge();
+
+	//we're now at the beginning of the start bit.  We can start collecting the data.
+	U64 frame_starting_sample = chData->channel->GetSampleNumber();
+
+	U64 data = 0;
+	bool parity_error = false;
+	bool framing_error = false;
+	bool mp_is_address = false;
+
+	DataBuilder data_builder;
+	data_builder.Reset( &data, mSettings->mShiftOrder, mSettings->mBitsPerTransfer );
+	U64 marker_location = frame_starting_sample;
+
+	if (chData->lastPacketStart == 0) {
+		// mark as a new packet the very first edge
+		mResults->AddMarker( frame_starting_sample, AnalyzerResults::Start, *chData->settingsChannel );
+	} else {
+		if (frame_starting_sample > (chData->lastPacketStart + chData->gapSizeInSamples)) {
+			mResults->AddMarker( chData->lastByteEnd, AnalyzerResults::Stop, *chData->settingsChannel );
+			mResults->AddMarker( frame_starting_sample, AnalyzerResults::Start, *chData->settingsChannel );
+		}
+	}
+
+	for( U32 i=0; i<mSettings->mBitsPerTransfer; i++ )
+	{
+		chData->channel->Advance( mSampleOffsets[i] );
+		data_builder.AddBit( chData->channel->GetBitState() );
+
+		marker_location += mSampleOffsets[i];
+		mResults->AddMarker( marker_location, AnalyzerResults::Dot, *chData->settingsChannel );
+	}
+
+	if (chData->inverted)
+		data = (~data) & bit_mask;
+
+	if( mSettings->mSerialMode != SerialAnalyzerEnums::Normal )
+	{
+		//extract the MSB
+		U64 msb = data >> (mSettings->mBitsPerTransfer - 1);
+		msb &= 0x1;
+		if( mSettings->mSerialMode == SerialAnalyzerEnums::MpModeMsbOneMeansAddress )
+		{
+			if( msb == 0x0 )
+				mp_is_address = false;
+			else
+				mp_is_address = true;
+		}
+		if( mSettings->mSerialMode == SerialAnalyzerEnums::MpModeMsbZeroMeansAddress )
+		{
+			if( msb == 0x0 )
+				mp_is_address = true;
+			else
+				mp_is_address = false;
+		}
+		//now remove the msb.
+		data &= ( bit_mask >> 1 );
+	}
+
+	parity_error = false;
+
+	if( mSettings->mParity != AnalyzerEnums::None )
+	{
+		chData->channel->Advance( mParityBitOffset );
+		bool is_even = AnalyzerHelpers::IsEven( AnalyzerHelpers::GetOnesCount( data ) );
+
+		if( mSettings->mParity == AnalyzerEnums::Even )
+		{
+			if( is_even == true )
+			{
+				if( chData->channel->GetBitState() != chData->bitLow ) //we expect a low bit, to keep the parity even.
+					parity_error = true;
+			}else
+			{
+				if( chData->channel->GetBitState() != chData->bitHigh ) //we expect a high bit, to force parity even.
+					parity_error = true;
+			}
+		} else  //if( mSettings->mParity == AnalyzerEnums::Odd )
+		{
+			if( is_even == false )
+			{
+				if( chData->channel->GetBitState() != chData->bitLow ) //we expect a low bit, to keep the parity odd.
+					parity_error = true;
+			}else
+			{
+				if( chData->channel->GetBitState() != chData->bitHigh ) //we expect a high bit, to force parity odd.
+					parity_error = true;
+			}
+		}
+
+		marker_location += mParityBitOffset;
+		mResults->AddMarker( marker_location, AnalyzerResults::Square, *chData->settingsChannel );
+	}
+
+	//now we must dermine if there is a framing error.
+	framing_error = false;
+
+	chData->channel->Advance( mStartOfStopBitOffset );
+
+	if( chData->channel->GetBitState() != chData->bitHigh ) {
+		framing_error = true;
+	} else {
+		U32 num_edges = chData->channel->Advance( mEndOfStopBitOffset );
+		if( num_edges != 0 )
+			framing_error = true;
+	}
+
+	if( framing_error == true )
+	{
+		marker_location += mStartOfStopBitOffset;
+		mResults->AddMarker( marker_location, AnalyzerResults::ErrorX, *chData->settingsChannel );
+
+		if( mEndOfStopBitOffset != 0 ) {
+			marker_location += mEndOfStopBitOffset;
+			mResults->AddMarker( marker_location, AnalyzerResults::ErrorX, *chData->settingsChannel );
+		}
+	}
+
+	//ok now record the value!
+	//note that we're not using the mData2 or mType fields for anything, so we won't bother to set them.
+	Frame frame;
+	frame.mStartingSampleInclusive = frame_starting_sample;
+	frame.mEndingSampleInclusive = chData->channel->GetSampleNumber();
+	chData->lastByteEnd = frame.mEndingSampleInclusive;
+	frame.mData1 = data;
+	frame.mFlags = 0;
+	if( parity_error == true )
+		frame.mFlags |= PARITY_ERROR_FLAG | DISPLAY_AS_ERROR_FLAG;
+
+	if( framing_error == true )
+		frame.mFlags |= FRAMING_ERROR_FLAG | DISPLAY_AS_ERROR_FLAG;
+
+	if( mp_is_address == true )
+		frame.mFlags |= MP_MODE_ADDRESS_FLAG;
+
+	if( chData->type == Tx )
+		frame.mFlags |= IS_TX;
+
+	if ((chData->lastPacketStart == 0)
+			|| (chData->lastPacketStart && (frame_starting_sample > (chData->lastPacketStart + chData->gapSizeInSamples)))) {
+		frame.mFlags |= PACKET_START;
+		chData->lastPacketStart = frame_starting_sample;
+	}
+	mResults->AddFrame( frame );
+	mResults->CommitResults();
+
+	if( framing_error == true )  //if we're still low, let's fix that for the next round.
+	{
+		if( chData->channel->GetBitState() == chData->bitLow )
+			chData->channel->AdvanceToNextEdge();
+	}
+
+	if (chData->channel->DoMoreTransitionsExistInCurrentData()) {
+		chData->nextSampleToProcess = chData->channel->GetSampleOfNextEdge();
 	}
 }
 
@@ -247,7 +297,10 @@ bool SerialAnalyzer::NeedsRerun()
 
 	//ok, lets see if we should change the bit rate, base on mShortestActivePulse
 
-	U64 shortest_pulse = mSerial->GetMinimumPulseWidthSoFar();
+	U64 shortest_pulse = mTxData.channel->GetMinimumPulseWidthSoFar();
+	U64 shortest_pulseRx = mRxData.channel->GetMinimumPulseWidthSoFar();
+
+	shortest_pulse = shortest_pulse < shortest_pulseRx ? shortest_pulse : shortest_pulseRx;
 
 	if( shortest_pulse == 0 )
 		AnalyzerHelpers::Assert( "Alg problem, shortest_pulse was 0" );
@@ -298,12 +351,12 @@ U32 SerialAnalyzer::GetMinimumSampleRateHz()
 
 const char* SerialAnalyzer::GetAnalyzerName() const
 {
-	return "Async Serial";
+	return "Dual async serial";
 }
 
 const char* GetAnalyzerName()
 {
-	return "Async Serial";
+	return "Dual async serial";
 }
 
 Analyzer* CreateAnalyzer()

@@ -1,17 +1,28 @@
-#ifndef SERIAL_ANALYZER_SETTINGS
-#define SERIAL_ANALYZER_SETTINGS
+#pragma once
 
+#include <stdint.h>
 #include <AnalyzerSettings.h>
 #include <AnalyzerTypes.h>
 
 namespace SerialAnalyzerEnums
 {
 	enum Mode { Normal, MpModeMsbZeroMeansAddress, MpModeMsbOneMeansAddress };
+}
+
+enum class ExportType : uint8_t {
+	CSV_OrTxt,
+	PacketizedText,
+	PacketizedTextWithTimeStamps,
+	TxOnly,
+	TxOnlyWithTimeStamps,
+	RxOnly,
+	RxOnlyWithTimeStamps
 };
 
 class SerialAnalyzerSettings : public AnalyzerSettings
 {
 public:
+
 	SerialAnalyzerSettings();
 	virtual ~SerialAnalyzerSettings();
 
@@ -21,26 +32,33 @@ public:
 	virtual const char* SaveSettings();
 
 	
-	Channel mInputChannel;
+	Channel mTxChannel;
+	Channel mRxChannel;
+	U32 mTxPacketMinGapIn_us = 10, mRxPacketMinGapIn_us = 10;
+	bool mRxInverted = false;
+	bool mTxInverted = false;
+
 	U32 mBitRate;
 	U32 mBitsPerTransfer;
 	AnalyzerEnums::ShiftOrder mShiftOrder;
 	double mStopBits;
 	AnalyzerEnums::Parity mParity;
-	bool mInverted;
 	bool mUseAutobaud;
 	SerialAnalyzerEnums::Mode mSerialMode;
 
 protected:
-	std::auto_ptr< AnalyzerSettingInterfaceChannel >	mInputChannelInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceInteger >	mBitRateInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList > mBitsPerTransferInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mShiftOrderInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mStopBitsInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mParityInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mInvertedInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceBool >	mUseAutobaudInterface;
-	std::auto_ptr< AnalyzerSettingInterfaceNumberList >	mSerialModeInterface;
-};
+	std::unique_ptr< AnalyzerSettingInterfaceChannel >	mTxChannelInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceInteger >	mTxPacketMinGapInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceChannel >	mRxChannelInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceInteger >	mRxPacketMinGapInterface;
 
-#endif //SERIAL_ANALYZER_SETTINGS
+	std::unique_ptr< AnalyzerSettingInterfaceInteger >	mBitRateInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList > mBitsPerTransferInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mShiftOrderInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mStopBitsInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mParityInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mRxInvertedInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mTxInvertedInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceBool >	mUseAutobaudInterface;
+	std::unique_ptr< AnalyzerSettingInterfaceNumberList >	mSerialModeInterface;
+};

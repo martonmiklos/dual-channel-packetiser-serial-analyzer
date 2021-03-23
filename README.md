@@ -1,6 +1,24 @@
-# Saleae Asynchronous Serial Analyzer
+# Dual channel Saleae Asynchronous Serial Analyzer with packet detection capabilities
 
-Saleae Asynchronous Serial Analyzer
+## What's this?
+
+This branch contains a heavily modified Saleae Asynchronous Serial Analyzer plugin which is equipped with the following capabilities:
+
+- It is capable to decode two UART channels simultenaously
+- The decoded bytes (if they follow each other) within a gap tied to packets
+- The packets start and end is marked on the view
+- The decoded packets from the two channels could be exported to a single file. Example output:
+```
+0.427849830000000 TX AA 12 01 D0 02 00 F4 C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 CB
+0.478017128000000 TX AA 12 01 D0 02 00 F5 C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 4B
+0.519377574000000 RX AA 0A 01 D3 04 00 00 00 00 D0 02 00 C2 E6
+0.528160586000000 TX AA 12 01 D0 02 00 F6 C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 D2
+0.578300896000000 TX AA 12 01 D0 02 00 F7 C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 52
+0.596686188000000 TX AA 0A 01 D0 02 00 F8 D3 04 00 00 00 00 51
+0.598837142000000 RX AA 2D 00 FA 81 35 38 36 33 39 3A 09 52 78 20 68 65 61 72 74 62 65 61 74 20 35 38 36 33 39 2C 20 69 6E 74 65 72 76 61 6C 20 30 78 30 73 0D 0A 5E
+0.628440674000000 TX AA 12 01 D0 02 00 F9 C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 1D
+0.678653890000000 TX AA 12 01 D0 02 00 FA C0 0C 00 00 00 00 00 00 00 00 00 00 00 00 84
+```
 
 ## Getting Started
 
