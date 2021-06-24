@@ -69,14 +69,14 @@ void SerialAnalyzer::WorkerThread()
 		num_bits++;
 
 	if (mSettings->mTxInverted) {
-		mTxData.bitHigh = BIT_HIGH;
-		mTxData.bitLow = BIT_LOW;
+		mTxData.bitHigh = BIT_LOW;
+		mTxData.bitLow = BIT_HIGH;
 		mTxData.inverted = true;
 	}
 
 	if (mSettings->mRxInverted) {
-		mRxData.bitHigh = BIT_HIGH;
-		mRxData.bitLow = BIT_LOW;
+		mRxData.bitHigh = BIT_LOW;
+		mRxData.bitLow = BIT_HIGH;
 		mRxData.inverted = true;
 	}
 
